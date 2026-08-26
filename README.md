@@ -1,12 +1,12 @@
-# HemaVision AI
+# HemaVision
 
-Non-invasive conjunctival anemia screener. A webcam or uploaded photo of the inner eyelid is processed with OpenCV (glare inpainting, vascular sharpening, CIELAB + erythema index) and mapped to an estimated hemoglobin value with a ConvNeXt-Tiny regression architecture.
+Palpebral conjunctiva haemoglobin screening. A webcam or photograph of the inner eyelid is processed with OpenCV, mapped to an estimated Hb, and labelled with WHO / AABB bands.
 
-**Screening aid only — not a substitute for a laboratory CBC.**
+**Screening aid only. A laboratory CBC remains the reference standard.**
 
-## Run locally
+## Run
 
-**Backend** (Python 3.10+, port 8000):
+Backend, port 8000:
 
 ```bash
 cd backend
@@ -16,7 +16,7 @@ pip install -r requirements.txt
 uvicorn main:app --reload --port 8000
 ```
 
-**Frontend** (Node 22+, port 3000):
+Frontend, port 3000:
 
 ```bash
 cd frontend
@@ -24,48 +24,52 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000), allow the camera, align the lower eyelid in the dashed oval, and tap **Scan Hemoglobin**. You can also upload a conjunctiva photo (a synthetic sample is at `backend/test_conjunctiva.jpg`).
+Open [http://localhost:3000](http://localhost:3000). Pages: **Exam**, **Protocol**, **Evidence**, **Log**.
 
-## Progress Made
+## Implemented features
 
-- End-to-end capture → DSP → Hb estimate → triage UI on a single localhost stack.
-- Specular glare / sunlight artifacts removed with an OpenCV highlight mask + Telea inpainting so outdoor point-of-care frames do not saturate the redness signal.
-- High-pass 2D spatial filter applied after inpainting to sharpen capillary contrast before chromophore extraction.
-- CIELAB `a*` (red–green chromaticity, luminance-decoupled) and Erythema Index `log10(R) − log10(G)` computed on the aligned conjunctival ROI, not the full webcam frame.
-- ConvNeXt-Tiny backbone with a custom dropout → 256-d GELU → scalar regression head (replacing the ImageNet classifier), matching 2024 non-invasive anemia CNN setups that reported peak AUC ≈ 0.97 on the actionable 7–9 g/dL band.
-- Clinical mapping from the PLOS ONE / MDPI chromophore relationship:  
-  `Hb ≈ 0.085·a* + 0.04·EI + 1.2` (g/dL), clipped to a physiological 3–18 g/dL range.
-- Triage labels at 5 / 7 / 9 / 12 g/dL (critical, transfusion threshold, moderate, mild, normemic).
-- Next.js scanner with webcam overlay, JPEG capture, same-origin `/api/analyze` proxy, and photo-upload fallback.
+**Capture**
+- Front-facing 1080p webcam, 1–5× digital zoom, palpebral reticle
+- Three-count capture; still-photo upload
+- Optional sex for WHO 2024 cutoffs
 
-## Technical Architecture
+**Signal processing**
+- Centre-crop of the reticle
+- Specular glare mask (L > 235) + Telea inpaint
+- Vascular high-pass kernel
+- CIELAB L*, a* (OpenCV a − 128), b*
+- Erythema index EI = 100 · (log₁₀ R − log₁₀ G)
+- Quality: glare %, luminance, ROI size, confidence flags
 
-```
-Webcam / upload (JPEG)
-        │
-        ▼
-Next.js UI  ──POST /api/analyze──►  FastAPI
-                                        │
-                         1. Center-crop conjunctival ROI
-                         2. Threshold glare (gray > 235) + inpaint
-                         3. High-pass kernel (vascular sharpening)
-                         4. BGR → CIELAB  → mean a*
-                         5. Erythema Index from log R / log G
-                         6. ConvNeXt-Tiny forward (architecture live)
-                         7. Chromophore regression → Hb g/dL
-                         8. Threshold triage
-                                        │
-                                        ▼
-                         JSON { hemoglobin_g_dL, status, metrics }
-```
+**Estimation**
+- Hb ≈ 7.6 + 0.18·a* + 0.11·EI g/dL (clipped 3–18)
+- ConvNeXt-Tiny + dropout/GELU regression head (architecture live; ImageNet weights are not the reported Hb)
+- Quality-scaled uncertainty band
 
-| Layer | Stack |
-| --- | --- |
-| Capture UI | Next.js 16, React 19, `react-webcam`, Tailwind CSS |
-| API | FastAPI + CORS, `python-multipart` |
-| DSP | OpenCV (`inpaint`, `filter2D`, CIELAB split) |
-| Colorimetry | CIELAB `a*`, erythema index |
-| DL backbone | PyTorch ConvNeXt-Tiny + custom 768→256→1 head |
-| Decision | Hb formula + 7–9 g/dL transfusion-band triage |
+**Triage**
+- WHO 2024 adult cutoffs (women 12.0, men 13.0 g/dL)
+- AABB 2023 restrictive transfusion band at 7 g/dL
+- Zhao 2024 high-AUC 7 and 9 g/dL operating points on the sheet
 
-Hackathon demo uses ImageNet-initialized ConvNeXt weights; the displayed Hb is the published chromophore mapping so judges see a calibrated number without a private clinical weight file.
+**Workstation**
+- Exam / Protocol / Evidence / Log
+- Lab-style report; browser-only exam log
+- FastAPI: `POST /analyze`, `GET /papers`, `GET /features`, `GET /health`
+
+## Research papers used
+
+1. Dawson JB, et al. Phys Med Biol. 1980;25(4):695-709. [10.1088/0031-9155/25/4/008](https://doi.org/10.1088/0031-9155/25/4/008) — erythema index physics.
+2. Collings S, et al. PLoS One. 2016;11(4):e0153286. [10.1371/journal.pone.0153286](https://doi.org/10.1371/journal.pone.0153286) — palpebral EI vs Hb.
+3. Dimauro G, et al. IEEE Access. 2018;6:46968-46975. [10.1109/ACCESS.2018.2867110](https://doi.org/10.1109/ACCESS.2018.2867110) — CIELAB a*.
+4. Mannino RG, et al. Nat Commun. 2018;9:4924. [10.1038/s41467-018-07262-2](https://doi.org/10.1038/s41467-018-07262-2) — phone-only Hb (nailbed; related).
+5. Dimauro G, et al. IEEE Access. 2019;7:113488-113498. [10.1109/ACCESS.2019.2932274](https://doi.org/10.1109/ACCESS.2019.2932274) — a* + EI jointly.
+6. Zhao L, et al. PLoS One. 2021;16(7):e0253495. [10.1371/journal.pone.0253495](https://doi.org/10.1371/journal.pone.0253495) — smartphone conjunctival Hb in ED.
+7. Ghosal S, et al. IEEE Sens J. 2021. [10.1109/JSEN.2020.3044386](https://doi.org/10.1109/JSEN.2020.3044386) — sHEMO spectroscopy.
+8. Liu Z, et al. CVPR. 2022. [10.1109/CVPR52688.2022.01167](https://doi.org/10.1109/CVPR52688.2022.01167) — ConvNeXt.
+9. Carson JL, et al. JAMA. 2023;330(19):1892-1902. [10.1001/jama.2023.12914](https://doi.org/10.1001/jama.2023.12914) — AABB 7 g/dL.
+10. Zhao L, et al. PLoS One. 2024;19(5):e0302883. [10.1371/journal.pone.0302883](https://doi.org/10.1371/journal.pone.0302883) — real-time app; AUC 0.92/0.90 at 7/9 g/dL.
+11. Kato S, et al. Br J Haematol. 2024;205(4):1590-1598. [10.1111/bjh.19621](https://doi.org/10.1111/bjh.19621) — DL Hb regression.
+12. WHO. Guideline on haemoglobin cutoffs… Geneva: WHO; 2024. [9789240088542](https://www.who.int/publications/i/item/9789240088542).
+13. Asare JW, et al. Healthc Inform Res. 2025;31(1):57-70. [PMC11854623](https://pmc.ncbi.nlm.nih.gov/articles/PMC11854623/) — conjunctiva CNN ensemble, AUC 0.97.
+
+Same list, with “how it is used,” lives on the **Evidence** page.

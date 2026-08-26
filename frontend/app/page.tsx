@@ -1,228 +1,248 @@
 "use client";
 
-import React, { useCallback, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import Webcam from "react-webcam";
-import { AlertCircle, Activity, Camera, Upload } from "lucide-react";
+import { ResultSheet } from "@/components/ResultSheet";
+import { appendExam } from "@/lib/log";
+import type { AnalyzeResult } from "@/lib/types";
 
-type AnalyzeResult = {
-  hemoglobin_g_dL: number;
-  status: string;
-  metrics: {
-    cielab_a_star: number;
-    erythema_index: number;
-  };
-};
+type Sex = "unspecified" | "female" | "male";
 
-export default function HemaVisionScanner() {
+export default function ExamPage() {
   const webcamRef = useRef<Webcam>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [result, setResult] = useState<AnalyzeResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const [countdown, setCountdown] = useState<number | null>(null);
   const [zoom, setZoom] = useState(2.5);
+  const [sex, setSex] = useState<Sex>("unspecified");
   const [error, setError] = useState<string | null>(null);
   const [cameraReady, setCameraReady] = useState(false);
 
-  const analyzeBlob = useCallback(async (blob: Blob) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const formData = new FormData();
-      formData.append("file", blob, "capture.jpg");
+  const analyzeBlob = useCallback(
+    async (blob: Blob, source: "camera" | "upload") => {
+      setLoading(true);
+      setError(null);
+      try {
+        const formData = new FormData();
+        formData.append("file", blob, "capture.jpg");
+        formData.append("sex", sex);
 
-      const response = await fetch("/api/analyze", {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const body = await response.json().catch(() => ({}));
-        throw new Error(body.detail || `Analysis failed (${response.status})`);
+        const response = await fetch("/api/analyze", {
+          method: "POST",
+          body: formData,
+        });
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          throw new Error(body.detail || `Analysis failed (${response.status})`);
+        }
+        const data: AnalyzeResult = await response.json();
+        setResult(data);
+        appendExam({ ...data, source });
+      } catch (err) {
+        setError(
+          err instanceof Error
+            ? err.message
+            : "The analysis service did not respond.",
+        );
+      } finally {
+        setLoading(false);
+        setCountdown(null);
       }
+    },
+    [sex],
+  );
 
-      const data: AnalyzeResult = await response.json();
-      setResult(data);
-    } catch (err) {
-      console.error("Inference Error:", err);
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Could not reach the HemaVision backend.",
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  const captureAndAnalyze = useCallback(async () => {
+  const captureNow = useCallback(async () => {
     const imageSrc = webcamRef.current?.getScreenshot();
     if (!imageSrc) {
-      setError("Camera is not ready. Allow webcam access or upload a photo.");
+      setError("Camera is not ready. Allow access or upload a photograph.");
+      setCountdown(null);
       return;
     }
     const res = await fetch(imageSrc);
-    const blob = await res.blob();
-    await analyzeBlob(blob);
+    await analyzeBlob(await res.blob(), "camera");
   }, [analyzeBlob]);
+
+  const startCapture = useCallback(() => {
+    if (loading) return;
+    setError(null);
+    setCountdown(3);
+    let n = 3;
+    const tick = window.setInterval(() => {
+      n -= 1;
+      if (n <= 0) {
+        window.clearInterval(tick);
+        setCountdown(0);
+        void captureNow();
+      } else {
+        setCountdown(n);
+      }
+    }, 650);
+  }, [captureNow, loading]);
 
   const onUpload = useCallback(
     async (event: React.ChangeEvent<HTMLInputElement>) => {
       const file = event.target.files?.[0];
-      if (file) await analyzeBlob(file);
+      if (file) await analyzeBlob(file, "upload");
       event.target.value = "";
     },
     [analyzeBlob],
   );
 
-  const isCritical = result !== null && result.hemoglobin_g_dL < 9.0;
-
   return (
-    <div className="min-h-screen bg-neutral-950 text-white flex flex-col items-center p-6 sm:p-8">
-      <div className="max-w-2xl w-full space-y-8">
-        <div className="text-center space-y-2">
-          <p className="text-xs uppercase tracking-[0.3em] text-red-400/80 font-semibold">
-            Point-of-care screening
-          </p>
-          <h1 className="text-4xl sm:text-5xl font-bold tracking-tighter text-red-500">
-            HemaVision AI
-          </h1>
-          <p className="text-neutral-400">
-            Non-Invasive Conjunctival Anemia Screener
-          </p>
-        </div>
+    <div className="mx-auto max-w-6xl px-5 py-8 sm:px-8">
+      <div className="mb-8 max-w-2xl">
+        <h1 className="font-serif text-3xl text-[var(--ink)] sm:text-4xl">
+          Lower-lid exam
+        </h1>
+        <p className="mt-3 text-[15px] leading-relaxed text-[var(--muted)]">
+          Evert the lower eyelid. Fill the oval with the inner pink mucosa —
+          not the iris, not the white of the eye. Hold still through the count.
+        </p>
+      </div>
 
-        <div className="relative rounded-2xl overflow-hidden bg-black aspect-video border-2 border-neutral-800">
-          <div className="w-full h-full flex items-center justify-center overflow-hidden">
-            <Webcam
-              ref={webcamRef}
-              audio={false}
-              screenshotFormat="image/jpeg"
-              screenshotQuality={0.95}
-              className="w-full h-full object-cover transition-transform duration-200"
-              style={{ transform: `scale(${zoom})` }}
-              videoConstraints={{
-                facingMode: "user",
-                width: { ideal: 1920 },
-                height: { ideal: 1080 },
-              }}
-              onUserMedia={() => setCameraReady(true)}
-              onUserMediaError={() => {
-                setCameraReady(false);
-                setError(
-                  "Webcam unavailable. Upload a conjunctiva photo instead.",
-                );
-              }}
-            />
+      <div className="grid items-start gap-8 lg:grid-cols-[minmax(0,1.2fr)_minmax(18rem,0.85fr)]">
+        <div>
+          <div className="relative aspect-[4/3] overflow-hidden border border-[var(--line)] bg-black">
+            <div className="flex h-full w-full items-center justify-center overflow-hidden">
+              <Webcam
+                ref={webcamRef}
+                audio={false}
+                screenshotFormat="image/jpeg"
+                screenshotQuality={0.95}
+                className="h-full w-full object-cover transition-transform duration-150"
+                style={{ transform: `scale(${zoom})` }}
+                videoConstraints={{
+                  facingMode: "user",
+                  width: { ideal: 1920 },
+                  height: { ideal: 1080 },
+                }}
+                onUserMedia={() => setCameraReady(true)}
+                onUserMediaError={() => {
+                  setCameraReady(false);
+                  setError("No webcam. Use a photograph of the inner eyelid.");
+                }}
+              />
+            </div>
+            <div className="pointer-events-none absolute left-1/2 top-1/2 h-36 w-60 -translate-x-1/2 -translate-y-1/2 rounded-[100%] border border-[#f3e6c8]/90 shadow-[0_0_0_9999px_rgba(0,0,0,0.42)]" />
+            <p className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[10px] uppercase tracking-[0.18em] text-white/80">
+              Inner eyelid
+            </p>
+            {countdown !== null && countdown > 0 && (
+              <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/35">
+                <span className="font-serif text-7xl text-white">{countdown}</span>
+              </div>
+            )}
+            <div className="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-3 bg-black/55 px-3 py-1.5 text-white">
+              <span className="text-sm">−</span>
+              <input
+                type="range"
+                min="1"
+                max="5"
+                step="0.1"
+                value={zoom}
+                onChange={(e) => setZoom(parseFloat(e.target.value))}
+                className="w-28"
+                aria-label="Digital zoom"
+              />
+              <span className="text-sm">+</span>
+              <span className="font-mono text-[11px] text-white/70">
+                {zoom.toFixed(1)}×
+              </span>
+            </div>
+            {!cameraReady && (
+              <p className="absolute left-3 top-3 bg-black/55 px-2 py-1 text-[11px] text-white/80">
+                Waiting for camera
+              </p>
+            )}
           </div>
 
-          <div className="absolute inset-0 border-4 border-red-500/30 rounded-2xl pointer-events-none" />
-
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-56 h-32 border-2 border-dashed border-red-500/80 rounded-[100%] flex items-center justify-center bg-red-500/10 pointer-events-none shadow-[0_0_0_9999px_rgba(0,0,0,0.5)]">
-            <span className="text-xs text-white font-bold tracking-widest drop-shadow-md">
-              ALIGN EYE
-            </span>
-          </div>
-
-          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/70 px-4 py-2 rounded-full flex items-center gap-3 backdrop-blur-md z-10">
-            <span className="text-white/70 text-xl font-bold leading-none">
-              −
-            </span>
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={startCapture}
+              disabled={loading}
+              className="bg-[var(--brick)] px-5 py-2.5 text-sm text-[var(--surface)] disabled:opacity-50"
+            >
+              {loading ? "Reading chromophores…" : "Capture exam"}
+            </button>
+            <button
+              type="button"
+              disabled={loading}
+              onClick={() => fileInputRef.current?.click()}
+              className="border border-[var(--line)] bg-[var(--surface)] px-4 py-2.5 text-sm disabled:opacity-50"
+            >
+              Upload photograph
+            </button>
             <input
-              type="range"
-              min="1"
-              max="5"
-              step="0.1"
-              value={zoom}
-              onChange={(e) => setZoom(parseFloat(e.target.value))}
-              className="w-32 accent-red-500"
-              aria-label="Digital zoom"
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={onUpload}
             />
-            <span className="text-white/70 text-xl font-bold leading-none">
-              +
-            </span>
           </div>
-
-          {!cameraReady && (
-            <div className="absolute top-3 left-3 text-[11px] text-neutral-400 bg-black/60 px-2 py-1 rounded z-10">
-              Waiting for camera…
-            </div>
-          )}
         </div>
 
-        <div className="space-y-3">
-          <button
-            onClick={captureAndAnalyze}
-            disabled={loading}
-            className="w-full py-4 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
-          >
-            {loading ? <Activity className="animate-spin" /> : <Camera />}
-            {loading ? "Processing RAW Signal..." : "Scan Hemoglobin"}
-          </button>
-
-          <button
-            type="button"
-            disabled={loading}
-            onClick={() => fileInputRef.current?.click()}
-            className="w-full py-3 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 font-medium rounded-xl flex items-center justify-center gap-2 transition-colors disabled:opacity-50 border border-neutral-700"
-          >
-            <Upload size={18} />
-            Upload conjunctiva photo
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={onUpload}
-          />
-        </div>
-
-        {error && (
-          <div className="bg-red-950/60 border border-red-800 text-red-300 rounded-xl px-4 py-3 text-sm">
-            {error}
-          </div>
-        )}
-
-        {result && (
-          <div className="bg-neutral-900 rounded-xl p-6 border border-neutral-700 space-y-4">
-            <div className="flex justify-between items-start gap-4">
-              <div>
-                <h3 className="text-neutral-400 font-medium uppercase tracking-wider text-sm">
-                  Estimated Hb
-                </h3>
-                <div className="text-5xl font-black text-white">
-                  {result.hemoglobin_g_dL}{" "}
-                  <span className="text-xl text-neutral-500">g/dL</span>
-                </div>
-              </div>
-              <div
-                className={`px-4 py-2 rounded-full text-sm font-bold flex items-center gap-2 ${
-                  isCritical
-                    ? "bg-red-500/20 text-red-400"
-                    : "bg-green-500/20 text-green-400"
-                }`}
-              >
-                <AlertCircle size={16} />
-                {result.status}
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4 pt-4 border-t border-neutral-700">
-              <div>
-                <div className="text-xs text-neutral-500">CIELAB a* Vector</div>
-                <div className="font-mono">{result.metrics.cielab_a_star}</div>
-              </div>
-              <div>
-                <div className="text-xs text-neutral-500">Erythema Index</div>
-                <div className="font-mono">{result.metrics.erythema_index}</div>
-              </div>
-            </div>
-            <p className="text-xs text-neutral-500">
-              Screening aid only. Not a diagnostic substitute for a complete
-              blood count. Triage bands follow 7–9 g/dL clinical thresholds.
+        <aside className="space-y-6">
+          <div className="border border-[var(--line)] bg-[var(--surface)] px-4 py-4">
+            <h2 className="font-serif text-lg">Before you capture</h2>
+            <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm leading-relaxed text-[var(--muted)]">
+              <li>Sit facing a window or lamp — no direct flash on the lid.</li>
+              <li>Pull the lower lid down until the mucosa is visible.</li>
+              <li>Zoom until the oval is mostly pink tissue.</li>
+              <li>Keep the head still through the three-count.</li>
+            </ol>
+            <p className="mt-3 text-[12px] text-[var(--muted)]">
+              Full steps are on{" "}
+              <a href="/protocol" className="underline decoration-[var(--line)]">
+                Protocol
+              </a>
+              .
             </p>
           </div>
-        )}
+
+          <fieldset className="border border-[var(--line)] bg-[var(--surface)] px-4 py-4">
+            <legend className="px-1 font-serif text-lg">WHO cutoff</legend>
+            <p className="mb-3 text-[12px] text-[var(--muted)]">
+              Used only for the anaemia label, not the Hb number.
+            </p>
+            {(
+              [
+                ["unspecified", "Unspecified (12.0 g/dL)"],
+                ["female", "Female (12.0 g/dL)"],
+                ["male", "Male (13.0 g/dL)"],
+              ] as const
+            ).map(([value, label]) => (
+              <label
+                key={value}
+                className="mb-1.5 flex cursor-pointer items-center gap-2 text-sm"
+              >
+                <input
+                  type="radio"
+                  name="sex"
+                  checked={sex === value}
+                  onChange={() => setSex(value)}
+                />
+                {label}
+              </label>
+            ))}
+          </fieldset>
+        </aside>
       </div>
+
+      {error && (
+        <p className="mt-6 border border-[var(--brick)]/30 bg-[var(--surface)] px-4 py-3 text-sm text-[var(--brick)]">
+          {error}
+        </p>
+      )}
+
+      {result && (
+        <div className="mt-8">
+          <ResultSheet result={result} />
+        </div>
+      )}
     </div>
   );
 }

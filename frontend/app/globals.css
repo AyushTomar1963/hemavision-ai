@@ -1,19 +1,50 @@
 @import "tailwindcss";
 
 :root {
-  --background: #0a0a0a;
-  --foreground: #ededed;
+  --paper: #efe8d9;
+  --surface: #fbf7ee;
+  --ink: #1c1915;
+  --muted: #6a6358;
+  --line: #d7cfc0;
+  --brick: #6e2c2c;
+  --pine: #2f5d50;
+  --background: var(--paper);
+  --foreground: var(--ink);
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-plex);
+  --font-serif: var(--font-source);
+  --font-mono: var(--font-plex-mono);
+}
+
+html,
+body {
+  background: var(--paper);
+  color: var(--ink);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  font-family: var(--font-plex), "Segoe UI", sans-serif;
+}
+
+.font-serif {
+  font-family: var(--font-source), "Times New Roman", serif;
+}
+
+.font-mono {
+  font-family: var(--font-plex-mono), ui-monospace, monospace;
+}
+
+input[type="range"] {
+  accent-color: var(--brick);
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--brick);
+  outline-offset: 2px;
 }

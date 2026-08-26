@@ -1,30 +1,44 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { IBM_Plex_Mono, IBM_Plex_Sans, Source_Serif_4 } from "next/font/google";
+import { SiteFooter, SiteHeader } from "@/components/SiteChrome";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const plex = IBM_Plex_Sans({
+  variable: "--font-plex",
   subsets: ["latin"],
+  weight: ["400", "500", "600"],
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const source = Source_Serif_4({
+  variable: "--font-source",
   subsets: ["latin"],
+  weight: ["400", "600", "700"],
+});
+
+const plexMono = IBM_Plex_Mono({
+  variable: "--font-plex-mono",
+  subsets: ["latin"],
+  weight: ["400", "500"],
 });
 
 export const metadata: Metadata = {
-  title: "HemaVision AI",
-  description: "Non-invasive conjunctival anemia screener",
+  title: {
+    default: "HemaVision",
+    template: "%s · HemaVision",
+  },
+  description: "Palpebral conjunctiva haemoglobin screening",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${plex.variable} ${source.variable} ${plexMono.variable} h-full`}
     >
-      <body className="min-h-full flex flex-col bg-neutral-950 text-white">
-        {children}
+      <body className="flex min-h-full flex-col bg-[var(--paper)] text-[var(--ink)] antialiased">
+        <SiteHeader />
+        <main className="flex-1">{children}</main>
+        <SiteFooter />
       </body>
     </html>
   );
