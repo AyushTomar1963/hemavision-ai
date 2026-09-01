@@ -13,43 +13,53 @@ export default function LogPage() {
   }, []);
 
   return (
-    <div className="mx-auto max-w-3xl px-5 py-10 sm:px-8">
-      <div className="flex items-end justify-between gap-4">
+    <div className="mx-auto max-w-3xl px-5 py-16 sm:px-8">
+      <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="font-serif text-3xl sm:text-4xl">Exam log</h1>
-          <p className="mt-2 text-sm text-[var(--muted)]">
-            Stored in this browser only. Nothing is sent to a server after the
-            analysis call.
+          <p className="mb-3 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">
+            Your history
+          </p>
+          <h1 className="font-serif text-4xl text-[var(--ink)] sm:text-5xl">
+            Everything you've captured.
+          </h1>
+          <p className="mt-3 max-w-xl text-sm text-[var(--muted)]">
+            Stays in this browser only — clearing your site data wipes it. The
+            server never sees these once the report has come back.
           </p>
         </div>
         {rows.length > 0 && (
           <button
             type="button"
-            className="text-sm underline decoration-[var(--line)]"
+            className="border border-[var(--line)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--muted)] hover:text-[var(--brick)]"
             onClick={() => {
               clearExamLog();
               setRows([]);
             }}
           >
-            Clear
+            Clear history
           </button>
         )}
       </div>
 
       {rows.length === 0 ? (
-        <p className="mt-10 text-[var(--muted)]">
-          No exams yet.{" "}
-          <Link href="/" className="underline decoration-[var(--line)]">
-            Capture one
+        <div className="mt-16 border border-dashed border-[var(--line)] bg-[var(--surface)] p-10 text-center">
+          <p className="font-serif text-xl text-[var(--ink)]">Nothing here yet.</p>
+          <p className="mt-2 text-sm text-[var(--muted)]">
+            Take your first exam to see reports show up here.
+          </p>
+          <Link
+            href="/exam"
+            className="mt-6 inline-flex items-center gap-2 bg-[var(--brick)] px-5 py-3 text-sm text-[var(--surface)]"
+          >
+            Start an exam →
           </Link>
-          .
-        </p>
+        </div>
       ) : (
-        <div className="mt-8 space-y-8">
+        <div className="mt-12 space-y-10">
           {rows.map((row) => (
             <div key={row.scan_id}>
-              <p className="mb-2 font-mono text-[11px] text-[var(--muted)]">
-                {row.captured_at} · {row.source}
+              <p className="mb-2 font-mono text-[11px] uppercase tracking-[0.14em] text-[var(--muted)]">
+                {new Date(row.captured_at).toLocaleString()} · {row.source}
               </p>
               <ResultSheet result={row} />
             </div>

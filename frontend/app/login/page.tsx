@@ -22,7 +22,7 @@ export default function LoginPage() {
     try {
       const tokens = await login(email, password);
       signIn(tokens);
-      router.push("/");
+      router.push("/exam");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed.");
     } finally {
@@ -31,60 +31,67 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="mx-auto max-w-md px-5 py-16 sm:px-8">
-      <h1 className="font-serif text-3xl">Sign in</h1>
-      <p className="mt-2 text-sm text-[var(--muted)]">
-        Demo account is pre-seeded — click{" "}
-        <span className="font-mono">Sign in</span> to try it.
-      </p>
+    <div className="mx-auto grid min-h-[70vh] max-w-md place-content-center px-5 py-16 sm:px-8">
+      <div className="border border-[var(--line)] bg-[var(--surface)] p-8">
+        <p className="mb-2 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">
+          Welcome back
+        </p>
+        <h1 className="font-serif text-3xl text-[var(--ink)]">Sign in</h1>
+        <p className="mt-3 text-sm text-[var(--muted)]">
+          The demo account is pre-filled. Click Sign in to jump straight to an
+          exam — you can create your own account afterwards.
+        </p>
 
-      <form onSubmit={onSubmit} className="mt-8 space-y-4">
-        <label className="block text-sm">
-          <span className="mb-1 block text-[var(--muted)]">Email</span>
-          <input
-            type="email"
-            autoComplete="email"
-            required
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            className="w-full border border-[var(--line)] bg-[var(--surface)] px-3 py-2 font-mono text-sm"
-          />
-        </label>
-        <label className="block text-sm">
-          <span className="mb-1 block text-[var(--muted)]">Password</span>
-          <input
-            type="password"
-            autoComplete="current-password"
-            required
-            minLength={8}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="w-full border border-[var(--line)] bg-[var(--surface)] px-3 py-2 font-mono text-sm"
-          />
-        </label>
+        <form onSubmit={onSubmit} className="mt-6 space-y-4">
+          <label className="block text-sm">
+            <span className="mb-1 block text-[var(--muted)]">Email</span>
+            <input
+              type="email"
+              autoComplete="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full border border-[var(--line)] bg-[var(--paper)] px-3 py-2 font-mono text-sm focus:border-[var(--brick)] focus:outline-none"
+            />
+          </label>
+          <label className="block text-sm">
+            <span className="mb-1 block text-[var(--muted)]">Password</span>
+            <input
+              type="password"
+              autoComplete="current-password"
+              required
+              minLength={8}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full border border-[var(--line)] bg-[var(--paper)] px-3 py-2 font-mono text-sm focus:border-[var(--brick)] focus:outline-none"
+            />
+          </label>
 
-        {error && (
-          <p className="border border-[var(--brick)]/30 bg-[var(--surface)] px-3 py-2 text-sm text-[var(--brick)]">
-            {error}
-          </p>
-        )}
+          {error && (
+            <p className="border border-[var(--brick)]/30 bg-[var(--paper)] px-3 py-2 text-sm text-[var(--brick)]">
+              {error}
+            </p>
+          )}
 
-        <div className="flex items-center gap-4 pt-2">
           <button
             type="submit"
             disabled={busy}
-            className="bg-[var(--brick)] px-5 py-2.5 text-sm text-[var(--surface)] disabled:opacity-50"
+            className="w-full bg-[var(--brick)] px-5 py-3 text-sm font-medium text-[var(--surface)] disabled:opacity-50"
           >
             {busy ? "Signing in…" : "Sign in"}
           </button>
-          <Link
-            href="/signup"
-            className="text-sm underline decoration-[var(--line)]"
-          >
-            Create an account
-          </Link>
-        </div>
-      </form>
+
+          <p className="pt-2 text-center text-sm text-[var(--muted)]">
+            New here?{" "}
+            <Link
+              href="/signup"
+              className="text-[var(--ink)] underline decoration-[var(--line)]"
+            >
+              Create an account
+            </Link>
+          </p>
+        </form>
+      </div>
     </div>
   );
 }

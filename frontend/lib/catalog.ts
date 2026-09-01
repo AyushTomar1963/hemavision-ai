@@ -149,12 +149,12 @@ export const FEATURES = [
     ],
   },
   {
-    group: "Workstation",
+    group: "Product",
     items: [
-      "Four pages: Exam, Protocol, Evidence, Log.",
-      "Lab-style result sheet.",
-      "Exam log stored only in this browser.",
-      "Same-origin proxy to FastAPI on port 8000.",
+      "Landing page, Exam, How it works, Evidence, Log, and accounts.",
+      "Clinician-style report sheet with numbers, band, and honest flags.",
+      "Exam history stored only in the browser; nothing is sent after the analysis call.",
+      "JWT sign-in, rate-limited API, per-request IDs on every response.",
     ],
   },
 ];
