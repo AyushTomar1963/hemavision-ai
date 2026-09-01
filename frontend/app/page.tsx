@@ -3,52 +3,36 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Webcam from "react-webcam";
 import { ResultSheet } from "@/components/ResultSheet";
+import { analyze } from "@/lib/api";
+import { useAuth } from "@/lib/auth-context";
 import { appendExam } from "@/lib/log";
 import type { AnalyzeResult } from "@/lib/types";
+import {
+  applyHardwareZoom,
+  cropCenterToZoom,
+  dataUrlToBlob,
+  DEFAULT_ZOOM_CAPS,
+  readZoomCapabilities,
+  type ZoomCaps,
+} from "@/lib/zoom";
 
 type Sex = "unspecified" | "female" | "male";
 
-const MAX_UPLOAD_BYTES = 8 * 1024 * 1024; // Keep well under backend's 12 MB cap.
-
-async function loadImage(src: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error("Could not decode captured frame."));
-    img.src = src;
-  });
-}
-
-async function cropToZoomedBlob(dataUrl: string, zoom: number): Promise<Blob> {
-  const img = await loadImage(dataUrl);
-  const safeZoom = Math.max(1, zoom);
-  const cropW = Math.max(64, Math.floor(img.width / safeZoom));
-  const cropH = Math.max(64, Math.floor(img.height / safeZoom));
-  const sx = Math.floor((img.width - cropW) / 2);
-  const sy = Math.floor((img.height - cropH) / 2);
-  const canvas = document.createElement("canvas");
-  canvas.width = cropW;
-  canvas.height = cropH;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("Canvas not available in this browser.");
-  ctx.drawImage(img, sx, sy, cropW, cropH, 0, 0, cropW, cropH);
-  return await new Promise<Blob>((resolve, reject) =>
-    canvas.toBlob(
-      (blob) => (blob ? resolve(blob) : reject(new Error("Encode failed."))),
-      "image/jpeg",
-      0.95,
-    ),
-  );
-}
+const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
 
 export default function ExamPage() {
   const webcamRef = useRef<Webcam>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const countdownTimer = useRef<number | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+
+  const { token } = useAuth();
+
   const [result, setResult] = useState<AnalyzeResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [zoom, setZoom] = useState(2.5);
+  const [zoomCaps, setZoomCaps] = useState<ZoomCaps>(DEFAULT_ZOOM_CAPS);
   const [sex, setSex] = useState<Sex>("unspecified");
   const [error, setError] = useState<string | null>(null);
   const [cameraReady, setCameraReady] = useState(false);
@@ -62,24 +46,36 @@ export default function ExamPage() {
     };
   }, []);
 
+  const primaryTrack = useCallback((): MediaStreamTrack | null => {
+    return streamRef.current?.getVideoTracks()[0] ?? null;
+  }, []);
+
+  const onUserMedia = useCallback(
+    (stream: MediaStream) => {
+      streamRef.current = stream;
+      setCameraReady(true);
+      const caps = readZoomCapabilities(stream.getVideoTracks()[0] ?? null);
+      setZoomCaps(caps);
+      if (caps.supported) {
+        const clamped = Math.min(Math.max(zoom, caps.min), caps.max);
+        setZoom(clamped);
+        void applyHardwareZoom(stream.getVideoTracks()[0] ?? null, clamped);
+      }
+    },
+    [zoom],
+  );
+
+  useEffect(() => {
+    if (!zoomCaps.supported) return;
+    void applyHardwareZoom(primaryTrack(), zoom);
+  }, [zoom, zoomCaps.supported, primaryTrack]);
+
   const analyzeBlob = useCallback(
     async (blob: Blob, source: "camera" | "upload") => {
       setLoading(true);
       setError(null);
       try {
-        const formData = new FormData();
-        formData.append("file", blob, "capture.jpg");
-        formData.append("sex", sex);
-
-        const response = await fetch("/api/analyze", {
-          method: "POST",
-          body: formData,
-        });
-        if (!response.ok) {
-          const body = await response.json().catch(() => ({}));
-          throw new Error(body.detail || `Analysis failed (${response.status})`);
-        }
-        const data: AnalyzeResult = await response.json();
+        const data = await analyze(blob, sex, token);
         setResult(data);
         appendExam({ ...data, source });
       } catch (err) {
@@ -93,7 +89,7 @@ export default function ExamPage() {
         setCountdown(null);
       }
     },
-    [sex],
+    [sex, token],
   );
 
   const captureNow = useCallback(async () => {
@@ -104,13 +100,17 @@ export default function ExamPage() {
       return;
     }
     try {
-      const blob = await cropToZoomedBlob(imageSrc, zoom);
+      // Hardware zoom is already baked into the frame; only crop for the
+      // canvas fallback path.
+      const blob = zoomCaps.supported
+        ? await dataUrlToBlob(imageSrc)
+        : await cropCenterToZoom(imageSrc, zoom);
       await analyzeBlob(blob, "camera");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Capture failed.");
       setCountdown(null);
     }
-  }, [analyzeBlob, zoom]);
+  }, [analyzeBlob, zoom, zoomCaps.supported]);
 
   const startCapture = useCallback(() => {
     if (loading || countdown !== null) return;
@@ -155,6 +155,10 @@ export default function ExamPage() {
   );
 
   const captureDisabled = loading || countdown !== null;
+  const zoomMin = zoomCaps.supported ? zoomCaps.min : 1;
+  const zoomMax = zoomCaps.supported ? zoomCaps.max : 5;
+  const zoomStep = zoomCaps.supported ? zoomCaps.step : 0.1;
+  const zoomTransform = zoomCaps.supported ? "none" : `scale(${zoom})`;
 
   return (
     <div className="mx-auto max-w-6xl px-5 py-8 sm:px-8">
@@ -178,13 +182,13 @@ export default function ExamPage() {
                 screenshotFormat="image/jpeg"
                 screenshotQuality={0.95}
                 className="h-full w-full object-cover transition-transform duration-150"
-                style={{ transform: `scale(${zoom})` }}
+                style={{ transform: zoomTransform }}
                 videoConstraints={{
                   facingMode: "user",
                   width: { ideal: 1920 },
                   height: { ideal: 1080 },
                 }}
-                onUserMedia={() => setCameraReady(true)}
+                onUserMedia={onUserMedia}
                 onUserMediaError={() => {
                   setCameraReady(false);
                   setError("No webcam. Use a photograph of the inner eyelid.");
@@ -204,9 +208,9 @@ export default function ExamPage() {
               <span className="text-sm">−</span>
               <input
                 type="range"
-                min="1"
-                max="5"
-                step="0.1"
+                min={zoomMin}
+                max={zoomMax}
+                step={zoomStep}
                 value={zoom}
                 onChange={(e) => setZoom(parseFloat(e.target.value))}
                 className="w-28"
@@ -215,6 +219,7 @@ export default function ExamPage() {
               <span className="text-sm">+</span>
               <span className="font-mono text-[11px] text-white/70">
                 {zoom.toFixed(1)}×
+                {zoomCaps.supported ? " · optical" : " · digital"}
               </span>
             </div>
             {!cameraReady && (

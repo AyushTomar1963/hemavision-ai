@@ -6,17 +6,23 @@ Palpebral conjunctiva haemoglobin screening. A webcam or photograph of the inner
 
 ## Run
 
-Backend, port 8000:
+### Backend, port 8000
 
 ```bash
 cd backend
 python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
+.venv/bin/pip install -r requirements.txt
+cp .env.example .env  # optional — every setting has a sensible default
+.venv/bin/uvicorn main:app --reload --port 8000
 ```
 
-Frontend, port 3000:
+Run the tests:
+
+```bash
+.venv/bin/pytest
+```
+
+### Frontend, port 3000
 
 ```bash
 cd frontend
@@ -24,37 +30,82 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). Pages: **Exam**, **Protocol**, **Evidence**, **Log**.
+Open [http://localhost:3000](http://localhost:3000). Pages: **Exam**, **Protocol**, **Evidence**, **Log**, **Login**, **Signup**.
+
+The frontend proxies `/api/*` to FastAPI so the browser only ever talks same-origin (no CORS shenanigans in the browser).
+
+## Environment (backend)
+
+All settings take the `HEMAVISION_` prefix. Full list in `backend/.env.example`. Highlights:
+
+| Key                                 | Default                                     | Purpose                                            |
+| ----------------------------------- | ------------------------------------------- | -------------------------------------------------- |
+| `HEMAVISION_CORS_ORIGINS`           | `http://localhost:3000,http://127.0.0.1:3000` | Comma-separated allowed origins                    |
+| `HEMAVISION_AUTH_REQUIRED`          | `false`                                     | If `true`, `/analyze` needs a Bearer token         |
+| `HEMAVISION_RUN_CONVNEXT`           | `false`                                     | Gate the ImageNet ConvNeXt-Tiny forward pass       |
+| `HEMAVISION_MAX_UPLOAD_BYTES`       | `12582912` (12 MB)                          | Server-side upload cap                             |
+| `HEMAVISION_RATE_LIMIT_ANALYZE`     | `30/minute`                                 | Per-IP rate limit                                  |
+| `HEMAVISION_DEMO_USER_EMAIL`        | `demo@hemavision.ai`                        | Seeded at first startup                            |
+| `HEMAVISION_DEMO_USER_PASSWORD`     | `demo1234`                                  | Seeded at first startup                            |
 
 ## Implemented features
 
 **Capture**
-- Front-facing 1080p webcam, 1–5× digital zoom, palpebral reticle
-- Three-count capture; still-photo upload
-- Optional sex for WHO 2024 cutoffs
+- Front-facing 1080p webcam with a palpebral reticle.
+- Native `MediaStreamTrack.applyConstraints({ advanced: [{ zoom }] })` when the camera exposes a zoom capability (Chromium on capable hardware); canvas-crop fallback everywhere else. Either way the JPEG we send matches the pixels the operator sees.
+- Three-count capture; still-photo upload.
+- Optional sex for WHO 2024 cutoffs.
 
 **Signal processing**
-- Centre-crop of the reticle
-- Specular glare mask (L > 235) + Telea inpaint
-- Vascular high-pass kernel
-- CIELAB L*, a* (OpenCV a − 128), b*
-- Erythema index EI = 100 · (log₁₀ R − log₁₀ G)
-- Quality: glare %, luminance, ROI size, confidence flags
+- Centre-crop of the reticle.
+- Specular glare mask (L > 235) + Telea inpaint.
+- Vascular high-pass kernel.
+- CIELAB L*, a* (OpenCV a − 128), b*.
+- Erythema index EI = 100 · (log₁₀ R − log₁₀ G).
+- Quality: glare %, luminance, ROI size, confidence flags.
 
 **Estimation**
-- Hb ≈ 7.6 + 0.18·a* + 0.11·EI g/dL (clipped 3–18)
-- ConvNeXt-Tiny + dropout/GELU regression head (architecture live; ImageNet weights are not the reported Hb)
-- Quality-scaled uncertainty band
+- Hb ≈ 7.6 + 0.18·a* + 0.11·EI g/dL (clipped 3–18).
+- ConvNeXt-Tiny + dropout/GELU regression head (architecture live behind `HEMAVISION_RUN_CONVNEXT=1`; ImageNet weights are not the reported Hb).
+- Quality-scaled uncertainty band.
 
 **Triage**
-- WHO 2024 adult cutoffs (women 12.0, men 13.0 g/dL)
-- AABB 2023 restrictive transfusion band at 7 g/dL
-- Zhao 2024 high-AUC 7 and 9 g/dL operating points on the sheet
+- WHO 2024 adult cutoffs (women 12.0, men 13.0 g/dL).
+- AABB 2023 restrictive transfusion band at 7 g/dL.
+- Zhao 2024 high-AUC 7 and 9 g/dL operating points on the sheet.
 
 **Workstation**
-- Exam / Protocol / Evidence / Log
-- Lab-style report; browser-only exam log
-- FastAPI: `POST /analyze`, `GET /papers`, `GET /features`, `GET /health`
+- Six pages: Exam, Protocol, Evidence, Log, Login, Signup.
+- Lab-style report; browser-only exam log.
+- FastAPI: `POST /analyze`, `POST /auth/signup`, `POST /auth/login`, `GET /auth/me`, `GET /papers`, `GET /features`, `GET /health`.
+
+## Backend architecture
+
+```
+backend/
+├── main.py              # ASGI entry: middleware, error handlers, lifespan
+├── config.py            # Pydantic-Settings, env-driven, cached
+├── logging_setup.py     # stdlib logging + per-request UUID via contextvars
+├── rate_limit.py        # shared slowapi Limiter
+├── auth.py              # /auth/signup, /auth/login, /auth/me
+├── analyze.py           # POST /analyze — validation, DSP, triage
+├── meta.py              # /, /health, /papers, /features
+├── db.py                # sqlite user store (one table, no ORM)
+├── security.py          # bcrypt + python-jose helpers
+├── schemas.py           # Pydantic response models
+├── pipeline.py          # OpenCV DSP
+├── clinical.py          # Hb map + WHO / AABB triage
+├── model.py             # ConvNeXt-Tiny wrapper (opt-in)
+├── catalog.py           # bibliography + feature catalog
+└── tests/               # pytest — clinical, meta, analyze, auth
+```
+
+Security notes:
+- Bearer-token JWT (HS256) via `python-jose`; passwords hashed with `bcrypt`.
+- Uploads: size cap, header + real-bytes MIME sniffing via `filetype`.
+- Per-request UUIDs on every response and log line.
+- Per-IP rate limiting via `slowapi` on `/analyze` and both auth endpoints.
+- CORS narrowed to the configured origin list; no `*`.
 
 ## Research papers used
 
@@ -72,4 +123,4 @@ Open [http://localhost:3000](http://localhost:3000). Pages: **Exam**, **Protocol
 12. WHO. Guideline on haemoglobin cutoffs… Geneva: WHO; 2024. [9789240088542](https://www.who.int/publications/i/item/9789240088542).
 13. Asare JW, et al. Healthc Inform Res. 2025;31(1):57-70. [PMC11854623](https://pmc.ncbi.nlm.nih.gov/articles/PMC11854623/) — conjunctiva CNN ensemble, AUC 0.97.
 
-Same list, with “how it is used,” lives on the **Evidence** page.
+Same list, with "how it is used," lives on the **Evidence** page.

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useAuth } from "@/lib/auth-context";
 
 const LINKS = [
   { href: "/", label: "Exam" },
@@ -12,6 +13,7 @@ const LINKS = [
 
 export function SiteHeader() {
   const path = usePathname();
+  const { email, loading, signOut } = useAuth();
 
   return (
     <header className="border-b border-[var(--line)] bg-[var(--surface)]">
@@ -42,6 +44,32 @@ export function SiteHeader() {
               </Link>
             );
           })}
+
+          <span className="ml-3 hidden h-4 w-px bg-[var(--line)] sm:inline-block" />
+
+          {!loading && email ? (
+            <span className="ml-2 flex items-center gap-2 text-[12px] text-[var(--muted)]">
+              <span className="hidden max-w-[14ch] truncate font-mono sm:inline">
+                {email}
+              </span>
+              <button
+                type="button"
+                onClick={signOut}
+                className="px-2 py-1 underline decoration-[var(--line)] hover:text-[var(--ink)]"
+              >
+                Sign out
+              </button>
+            </span>
+          ) : (
+            !loading && (
+              <Link
+                href="/login"
+                className="ml-2 px-3 py-1.5 text-[var(--muted)] hover:text-[var(--ink)]"
+              >
+                Sign in
+              </Link>
+            )
+          )}
         </nav>
       </div>
     </header>

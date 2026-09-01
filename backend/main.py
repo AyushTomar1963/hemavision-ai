@@ -1,145 +1,114 @@
-import io
-import os
+"""HemaVision FastAPI entry point.
+
+Run with:  uvicorn main:app --reload --port 8000
+"""
+
+from __future__ import annotations
+
 import uuid
-from datetime import datetime, timezone
+from contextlib import asynccontextmanager
 
-import cv2
-import numpy as np
-import torch
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from PIL import Image, UnidentifiedImageError
+from fastapi.responses import JSONResponse
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from catalog import FEATURES, PAPERS
-from clinical import estimate_hemoglobin, triage_status, uncertainty, who_class
-from model import load_model, tensor_from_bgr
-from pipeline import decode_image, extract_chromophores, quality_report
+from analyze import router as analyze_router
+from auth import router as auth_router
+from config import get_settings
+from db import ensure_demo_user, init_db
+from logging_setup import configure_logging, get_logger, request_id_var
+from meta import router as meta_router
+from model import load_model
+from rate_limit import limiter
+from security import hash_password
 
-MAX_UPLOAD_BYTES = 12 * 1024 * 1024  # 12 MB — plenty for a 1080p JPEG.
-ALLOWED_MIME_PREFIXES = ("image/",)
-RUN_CONVNEXT = os.getenv("HEMAVISION_RUN_CONVNEXT", "0") == "1"
+settings = get_settings()
+configure_logging(settings.log_level)
+logger = get_logger("hemavision.main")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info(
+        "startup version=%s auth_required=%s convnext=%s cors=%s",
+        settings.version,
+        settings.auth_required,
+        settings.run_convnext,
+        settings.cors_origins_list(),
+    )
+    init_db(settings.db_path)
+    ensure_demo_user(
+        settings.db_path,
+        settings.demo_user_email,
+        hash_password(settings.demo_user_password),
+    )
+    app.state.convnext = load_model() if settings.run_convnext else None
+    try:
+        yield
+    finally:
+        logger.info("shutdown")
+
 
 app = FastAPI(
-    title="HemaVision",
-    version="2.0.1",
+    title=settings.app_name,
+    version=settings.version,
     description="Palpebral conjunctiva haemoglobin screening — not a CBC.",
+    lifespan=lifespan,
 )
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins_list(),
     allow_methods=["GET", "POST"],
-    allow_headers=["*"],
+    allow_headers=["Authorization", "Content-Type"],
+    max_age=600,
 )
 
-model = load_model() if RUN_CONVNEXT else None
 
-
-def bgr_from_upload(contents: bytes) -> np.ndarray:
-    img = decode_image(contents)
-    if img is not None:
-        return img
+@app.middleware("http")
+async def add_request_id(request: Request, call_next):
+    rid = request.headers.get("x-request-id") or uuid.uuid4().hex[:12]
+    token = request_id_var.set(rid)
     try:
-        pil = Image.open(io.BytesIO(contents)).convert("RGB")
-        return cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
-    except (UnidentifiedImageError, OSError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=f"Could not decode image: {exc}") from exc
+        response = await call_next(request)
+    finally:
+        request_id_var.reset(token)
+    response.headers["x-request-id"] = rid
+    return response
 
 
-@app.get("/")
-async def root():
-    return {
-        "service": "HemaVision",
-        "version": "2.0.1",
-        "routes": ["/analyze", "/health", "/papers", "/features"],
-    }
+def _error_response(status_code: int, detail: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={"detail": detail, "request_id": request_id_var.get() or "-"},
+    )
 
 
-@app.get("/health")
-async def health():
-    return {"ok": True, "model_loaded": model is not None, "version": "2.0.1"}
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(_: Request, exc: StarletteHTTPException):
+    return _error_response(exc.status_code, str(exc.detail))
 
 
-@app.get("/papers")
-async def papers():
-    return {"papers": PAPERS}
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(_: Request, exc: RequestValidationError):
+    return _error_response(422, f"Validation error: {exc.errors()}")
 
 
-@app.get("/features")
-async def features():
-    return {"features": FEATURES}
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(_: Request, exc: Exception):
+    logger.exception("unhandled_exception %s", exc)
+    return _error_response(500, "Internal server error.")
 
 
-@app.post("/analyze")
-async def analyze_conjunctiva(
-    file: UploadFile = File(...),
-    sex: str = Form("unspecified"),
-):
-    if file.content_type and not file.content_type.startswith(ALLOWED_MIME_PREFIXES):
-        raise HTTPException(status_code=415, detail=f"Unsupported media type: {file.content_type}")
-
-    contents = await file.read()
-    if not contents:
-        raise HTTPException(status_code=400, detail="Empty upload")
-    if len(contents) > MAX_UPLOAD_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail=f"Image is {len(contents) // 1024} KB; max {MAX_UPLOAD_BYTES // 1024} KB.",
-        )
-
-    sex_key = (sex or "unspecified").strip().lower()
-    if sex_key not in {"female", "male", "unspecified"}:
-        sex_key = "unspecified"
-
-    img = bgr_from_upload(contents)
-    if img.shape[0] < 16 or img.shape[1] < 16:
-        raise HTTPException(status_code=400, detail="Image is too small to analyse.")
-
-    try:
-        sample = extract_chromophores(img)
-    except cv2.error as exc:
-        raise HTTPException(status_code=422, detail=f"OpenCV pipeline failed: {exc}") from exc
-
-    quality = quality_report(sample)
-    hb = estimate_hemoglobin(sample.a_star, sample.erythema_index)
-
-    convnext_ran = False
-    if model is not None:
-        try:
-            with torch.no_grad():
-                _ = model(tensor_from_bgr(sample.restored_bgr))
-            convnext_ran = True
-        except (RuntimeError, ValueError) as exc:
-            # Backbone failure must not break the chromophore-based result.
-            print(f"[HemaVision] ConvNeXt forward-pass skipped: {exc}")
-
-    who = who_class(hb, sex_key)
-    return {
-        "scan_id": f"hv_{uuid.uuid4().hex[:10]}",
-        "captured_at": datetime.now(timezone.utc).isoformat(),
-        "hemoglobin_g_dL": round(hb, 2),
-        "uncertainty_g_dL": uncertainty(quality["score"]),
-        "status": triage_status(hb, sex_key),
-        "who": who,
-        "quality": quality,
-        "metrics": {
-            "cielab_a_star": round(sample.a_star, 2),
-            "cielab_L": round(sample.L_star, 2),
-            "cielab_b_star": round(sample.b_star, 2),
-            "erythema_index": round(sample.erythema_index, 2),
-            "opencv_a_channel": round(sample.opencv_a, 2),
-        },
-        "pipeline": [
-            "center-crop reticle",
-            "glare mask + Telea inpaint",
-            "vascular high-pass",
-            "CIELAB a*/L*/b*",
-            "erythema index",
-            "chromophore Hb",
-        ],
-        "model": {
-            "backbone": "convnext_tiny",
-            "loaded": model is not None,
-            "forward_pass": convnext_ran,
-            "clinical_source": "chromophore linear map (a*, EI)",
-        },
-    }
+app.include_router(meta_router)
+app.include_router(auth_router)
+app.include_router(analyze_router)
