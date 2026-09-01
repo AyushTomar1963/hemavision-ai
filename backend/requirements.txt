@@ -1,10 +1,11 @@
+# Baseline runtime — fits Render free tier (< 512 MB).
+# For the optional ConvNeXt forward pass, also install requirements-ml.txt.
+
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
 python-multipart>=0.0.12
 opencv-python-headless>=4.10.0
 numpy>=1.26.0
-torch>=2.4.0
-torchvision>=0.19.0
 pillow>=10.4.0
 filetype>=1.2.0
 bcrypt>=4.2.0

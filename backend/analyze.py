@@ -10,7 +10,6 @@ from typing import Optional
 import cv2
 import filetype
 import numpy as np
-import torch
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from PIL import Image, UnidentifiedImageError
 
@@ -76,10 +75,12 @@ def _run_convnext(model, restored_bgr: np.ndarray) -> bool:
     if model is None:
         return False
     try:
+        import torch  # Lazy so a torch-free deploy still boots.
+
         with torch.no_grad():
             _ = model(tensor_from_bgr(restored_bgr))
         return True
-    except (RuntimeError, ValueError) as exc:
+    except (RuntimeError, ValueError, ImportError) as exc:
         logger.warning("convnext_skip reason=%s", exc)
         return False
 

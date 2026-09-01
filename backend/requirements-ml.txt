@@ -1,0 +1,11 @@
+# Optional — only needed when HEMAVISION_RUN_CONVNEXT=1.
+# Torch + torchvision adds ~2 GB; the base requirements.txt handles a
+# torch-free deploy fine (the model is opt-in and returns None on import
+# failure).
+#
+# For a CPU-only, ~200 MB install, prefer:
+#   pip install --index-url https://download.pytorch.org/whl/cpu \
+#     torch torchvision
+
+torch>=2.4.0
+torchvision>=0.19.0

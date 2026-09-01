@@ -1,0 +1,45 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+#
+# Deploy from this file: on Render, New → Blueprint → point at this repo.
+# Render picks up the service below automatically.
+
+services:
+  - type: web
+    name: hemavision-api
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: HEMAVISION_LOG_LEVEL
+        value: INFO
+      - key: HEMAVISION_RUN_CONVNEXT
+        value: "false"
+      - key: HEMAVISION_AUTH_REQUIRED
+        value: "false"
+      # Comma-separated list. Add your Vercel URL here after deploy, e.g.:
+      #   https://hemavision.vercel.app,https://hemavision-*.vercel.app
+      - key: HEMAVISION_CORS_ORIGINS
+        value: http://localhost:3000
+      # Rotate to a real secret — Render will auto-generate one when set to `generateValue`.
+      - key: HEMAVISION_JWT_SECRET
+        generateValue: true
+      - key: HEMAVISION_JWT_EXPIRE_MINUTES
+        value: "1440"
+      - key: HEMAVISION_DEMO_USER_EMAIL
+        value: demo@hemavision.ai
+      - key: HEMAVISION_DEMO_USER_PASSWORD
+        value: demo1234
+      - key: HEMAVISION_RATE_LIMIT_ANALYZE
+        value: 30/minute
+      - key: HEMAVISION_RATE_LIMIT_AUTH
+        value: 10/minute
+      # The sqlite file is ephemeral on Render's free tier — data resets
+      # on redeploy. Attach a disk (or move to Postgres) for persistence.
+      - key: HEMAVISION_DB_PATH
+        value: /tmp/hemavision.db
