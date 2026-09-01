@@ -2,59 +2,61 @@
 
 Two services:
 
-| Service         | Host   | Root       | Env var it needs                                        |
-| --------------- | ------ | ---------- | ------------------------------------------------------- |
-| FastAPI backend | Render | `backend/` | (see below)                                             |
-| Next.js frontend| Vercel | `frontend/`| `BACKEND_URL` = your Render URL, no trailing slash      |
+| Service         | Host    | Root       | Env var it needs                                        |
+| --------------- | ------- | ---------- | ------------------------------------------------------- |
+| FastAPI backend | Railway | `backend/` | (see below)                                             |
+| Next.js frontend| Vercel  | `frontend/`| `BACKEND_URL` = your Railway URL, no trailing slash     |
 
 Deploy the backend first, copy its URL, then paste it into Vercel as `BACKEND_URL`.
 
 ---
 
-## 1. Backend on Render
+## 1. Backend on Railway
 
 Two options — pick one.
 
-### Option A — Blueprint (one click, reads `render.yaml`)
+### Option A — Dashboard (no CLI needed)
 
-1. Push this repo to GitHub (already done).
-2. Log into <https://dashboard.render.com>.
-3. **New +** → **Blueprint** → connect the `hemavision-ai` repo.
-4. Render reads `render.yaml` at the repo root and creates one Web Service:
-   - Name: `hemavision-api`
-   - Runtime: Python 3.11.9
-   - Root dir: `backend`
-   - Build: `pip install --upgrade pip && pip install -r requirements.txt`
-   - Start: `uvicorn main:app --host 0.0.0.0 --port $PORT`
-   - Health check: `/health`
-   - `HEMAVISION_JWT_SECRET` is auto-generated.
-5. Click **Apply**. First build takes 3–5 min (opencv-python-headless is the slow bit).
-6. When it goes live you get a URL like `https://hemavision-api.onrender.com`. **Copy it.**
-
-### Option B — Manual Web Service
-
-If you don't want to use the Blueprint:
-
-1. **New +** → **Web Service** → connect the repo.
-2. Fill in:
+1. Push the repo to GitHub (already done).
+2. Log into <https://railway.com>.
+3. **New Project → Deploy from GitHub repo** → pick `AyushTomar1963/hemavision-ai`.
+4. When the service is created, open it and go to **Settings**:
    - **Root Directory**: `backend`
-   - **Runtime**: Python 3
-   - **Build Command**: `pip install --upgrade pip && pip install -r requirements.txt`
-   - **Start Command**: `uvicorn main:app --host 0.0.0.0 --port $PORT`
-   - **Health Check Path**: `/health`
-3. Environment tab — add every variable from the table below.
+   - Nixpacks reads `backend/nixpacks.toml` and `backend/railway.toml` automatically.
+   - **Health Check Path**: `/health` (auto-picked from `railway.toml`)
+5. **Variables** tab → paste the block below (edit values you care about).
+6. **Networking → Public Networking → Generate Domain**. You get:
 
-### Environment variables (Render)
+   ```
+   https://hemavision-api-production.up.railway.app
+   ```
 
-Paste these under **Environment → Environment Variables** (skip on Blueprint — already there):
+   **Copy that URL.** It's what Vercel needs.
+
+### Option B — Railway CLI
+
+```bash
+npm i -g @railway/cli
+railway login
+cd backend
+railway init            # or: railway link  (if the project already exists)
+railway up              # builds + deploys the current directory
+railway domain          # generate a public URL
+railway variables set HEMAVISION_JWT_SECRET=$(openssl rand -hex 32)
+railway variables set HEMAVISION_CORS_ORIGINS=https://YOUR-APP.vercel.app
+railway logs
+```
+
+### Environment variables (Railway)
+
+Paste as a block in Variables → Raw Editor:
 
 ```
-PYTHON_VERSION=3.11.9
 HEMAVISION_LOG_LEVEL=INFO
 HEMAVISION_RUN_CONVNEXT=false
 HEMAVISION_AUTH_REQUIRED=false
-HEMAVISION_CORS_ORIGINS=https://YOUR-APP.vercel.app,https://YOUR-APP-*.vercel.app,http://localhost:3000
-HEMAVISION_JWT_SECRET=<generate a long random string>
+HEMAVISION_CORS_ORIGINS=https://YOUR-APP.vercel.app,http://localhost:3000
+HEMAVISION_JWT_SECRET=REPLACE-ME-WITH-A-LONG-RANDOM-STRING
 HEMAVISION_JWT_EXPIRE_MINUTES=1440
 HEMAVISION_DEMO_USER_EMAIL=demo@hemavision.ai
 HEMAVISION_DEMO_USER_PASSWORD=demo1234
@@ -63,24 +65,28 @@ HEMAVISION_RATE_LIMIT_AUTH=10/minute
 HEMAVISION_DB_PATH=/tmp/hemavision.db
 ```
 
-`HEMAVISION_CORS_ORIGINS` you'll fill in after Vercel gives you a URL — it's fine to leave `http://localhost:3000` and edit later.
+- **`HEMAVISION_JWT_SECRET`**: generate with `openssl rand -hex 32` or `python -c "import secrets; print(secrets.token_hex(32))"`. Never ship the default.
+- **`HEMAVISION_CORS_ORIGINS`**: fill in after Vercel gives you a URL. `http://localhost:3000` is fine to keep for local dev.
+- Railway auto-injects `PORT`, so no need to set it — `uvicorn ... --port ${PORT}` in `railway.toml` picks it up.
 
 ### Verify
 
 ```
-GET  https://hemavision-api.onrender.com/health
+GET  https://<your>.up.railway.app/health
 # → {"ok":true,"model_loaded":false,"version":"2.1.0"}
 
-GET  https://hemavision-api.onrender.com/papers
-POST https://hemavision-api.onrender.com/auth/login
+GET  https://<your>.up.railway.app/papers
+
+POST https://<your>.up.railway.app/auth/login
      Content-Type: application/json
      {"email":"demo@hemavision.ai","password":"demo1234"}
+# → {"access_token":"...","token_type":"bearer","expires_in":86400,"email":"..."}
 ```
 
-Free-tier caveats:
-- Render sleeps after 15 min idle → first request wakes it (~30 s cold start).
-- Sqlite lives on `/tmp` and resets on every deploy or sleep. Attach a Render Disk if you need persistence, or switch to Postgres.
-- Torch/torchvision are NOT installed here (they'd blow the 512 MB slug). ConvNeXt stays off in production; local dev can add `pip install -r requirements-ml.txt`.
+Railway caveats:
+- No sleep on the Hobby plan; the free trial gets $5 of usage.
+- Sqlite lives on `/tmp` and resets on redeploy. Attach a Volume (Settings → Storage → Mount at `/data`, set `HEMAVISION_DB_PATH=/data/hemavision.db`) if you want persistent accounts. For a hackathon demo, `/tmp` is fine — the seeded demo user re-seeds on every boot.
+- Torch/torchvision are NOT installed in production (they'd blow build time and RAM). ConvNeXt stays off in production; local dev can add `pip install -r requirements-ml.txt`.
 
 ---
 
@@ -96,22 +102,22 @@ Free-tier caveats:
 4. **Environment Variables** — add just this one:
 
    ```
-   BACKEND_URL = https://hemavision-api.onrender.com
+   BACKEND_URL = https://<your>.up.railway.app
    ```
 
    No trailing slash. Apply to Production, Preview, and Development.
 5. **Deploy**. First build ~2 min.
-6. Vercel gives you `https://hemavision-<something>.vercel.app`. Open it.
+6. Vercel gives you `https://hemavision-<slug>.vercel.app`. Open it.
 
-### Wire CORS back into Render
+### Wire CORS back into Railway
 
-Once you have the Vercel URL, edit `HEMAVISION_CORS_ORIGINS` on Render:
+Once you have the Vercel URL, edit `HEMAVISION_CORS_ORIGINS` on Railway → Variables:
 
 ```
-HEMAVISION_CORS_ORIGINS=https://hemavision-<your-slug>.vercel.app,https://hemavision-*.vercel.app
+HEMAVISION_CORS_ORIGINS=https://hemavision-<your-slug>.vercel.app
 ```
 
-Render redeploys automatically. Done.
+Railway redeploys automatically. Done.
 
 ---
 
@@ -119,17 +125,23 @@ Render redeploys automatically. Done.
 
 Default is anonymous — anyone can hit `/analyze`. To require login:
 
-1. Render → set `HEMAVISION_AUTH_REQUIRED=true`.
-2. Rotate `HEMAVISION_JWT_SECRET` to a real random string (Render's `generateValue` handles this on Blueprint deploys).
-3. Change `HEMAVISION_DEMO_USER_PASSWORD` or delete the seeded demo user in the sqlite file.
+1. Railway → set `HEMAVISION_AUTH_REQUIRED=true`.
+2. Rotate `HEMAVISION_JWT_SECRET` to a real random string.
+3. Change `HEMAVISION_DEMO_USER_PASSWORD` (or disable the seed by editing `db.ensure_demo_user`).
 
 ---
 
 ## Quick checklist for the demo
 
-- [ ] Backend URL responds to `/health` in the browser.
+- [ ] `https://<your>.up.railway.app/health` returns `{"ok":true,...}`.
 - [ ] Vercel URL loads and the Exam page shows the webcam preview.
 - [ ] Capture a frame — result sheet renders, no 4xx/5xx in the network tab.
 - [ ] `/login` accepts `demo@hemavision.ai / demo1234`.
 - [ ] `/protocol`, `/evidence`, `/log` all load without a white screen.
-- [ ] Hit `/api/analyze` directly from browser → 405 or 422 (not 500). Confirms the proxy is alive.
+- [ ] `POST /api/analyze` with no file → 400 or 422 (not 500).
+
+---
+
+## Appendix — Render (previous plan)
+
+The repo still contains `render.yaml` and `backend/runtime.txt` for a Render Blueprint deploy if you ever want to switch back. See `render.yaml` at the repo root; the env vars are the same as the Railway block above.

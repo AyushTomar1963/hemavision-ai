@@ -1,0 +1,11 @@
+# Nixpacks build hints for Railway.
+# Pins Python 3.11 (matches runtime.txt) and installs system libs OpenCV needs.
+
+[phases.setup]
+nixPkgs = ["python311", "gcc", "libGL", "libglvnd", "glib"]
+
+[phases.install]
+cmds = ["python -m pip install --upgrade pip", "pip install -r requirements.txt"]
+
+[start]
+cmd = "uvicorn main:app --host 0.0.0.0 --port ${PORT}"
