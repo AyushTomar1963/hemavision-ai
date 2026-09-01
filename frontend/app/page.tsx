@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Webcam from "react-webcam";
 import { ResultSheet } from "@/components/ResultSheet";
 import { appendExam } from "@/lib/log";
@@ -8,9 +8,43 @@ import type { AnalyzeResult } from "@/lib/types";
 
 type Sex = "unspecified" | "female" | "male";
 
+const MAX_UPLOAD_BYTES = 8 * 1024 * 1024; // Keep well under backend's 12 MB cap.
+
+async function loadImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("Could not decode captured frame."));
+    img.src = src;
+  });
+}
+
+async function cropToZoomedBlob(dataUrl: string, zoom: number): Promise<Blob> {
+  const img = await loadImage(dataUrl);
+  const safeZoom = Math.max(1, zoom);
+  const cropW = Math.max(64, Math.floor(img.width / safeZoom));
+  const cropH = Math.max(64, Math.floor(img.height / safeZoom));
+  const sx = Math.floor((img.width - cropW) / 2);
+  const sy = Math.floor((img.height - cropH) / 2);
+  const canvas = document.createElement("canvas");
+  canvas.width = cropW;
+  canvas.height = cropH;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas not available in this browser.");
+  ctx.drawImage(img, sx, sy, cropW, cropH, 0, 0, cropW, cropH);
+  return await new Promise<Blob>((resolve, reject) =>
+    canvas.toBlob(
+      (blob) => (blob ? resolve(blob) : reject(new Error("Encode failed."))),
+      "image/jpeg",
+      0.95,
+    ),
+  );
+}
+
 export default function ExamPage() {
   const webcamRef = useRef<Webcam>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const countdownTimer = useRef<number | null>(null);
   const [result, setResult] = useState<AnalyzeResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
@@ -18,6 +52,15 @@ export default function ExamPage() {
   const [sex, setSex] = useState<Sex>("unspecified");
   const [error, setError] = useState<string | null>(null);
   const [cameraReady, setCameraReady] = useState(false);
+
+  useEffect(() => {
+    return () => {
+      if (countdownTimer.current !== null) {
+        window.clearInterval(countdownTimer.current);
+        countdownTimer.current = null;
+      }
+    };
+  }, []);
 
   const analyzeBlob = useCallback(
     async (blob: Blob, source: "camera" | "upload") => {
@@ -60,35 +103,58 @@ export default function ExamPage() {
       setCountdown(null);
       return;
     }
-    const res = await fetch(imageSrc);
-    await analyzeBlob(await res.blob(), "camera");
-  }, [analyzeBlob]);
+    try {
+      const blob = await cropToZoomedBlob(imageSrc, zoom);
+      await analyzeBlob(blob, "camera");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Capture failed.");
+      setCountdown(null);
+    }
+  }, [analyzeBlob, zoom]);
 
   const startCapture = useCallback(() => {
-    if (loading) return;
+    if (loading || countdown !== null) return;
     setError(null);
     setCountdown(3);
     let n = 3;
-    const tick = window.setInterval(() => {
+    countdownTimer.current = window.setInterval(() => {
       n -= 1;
       if (n <= 0) {
-        window.clearInterval(tick);
+        if (countdownTimer.current !== null) {
+          window.clearInterval(countdownTimer.current);
+          countdownTimer.current = null;
+        }
         setCountdown(0);
         void captureNow();
       } else {
         setCountdown(n);
       }
     }, 650);
-  }, [captureNow, loading]);
+  }, [captureNow, countdown, loading]);
 
   const onUpload = useCallback(
     async (event: React.ChangeEvent<HTMLInputElement>) => {
       const file = event.target.files?.[0];
-      if (file) await analyzeBlob(file, "upload");
       event.target.value = "";
+      if (!file) return;
+      if (!file.type.startsWith("image/")) {
+        setError(`Not an image file (${file.type || "unknown type"}).`);
+        return;
+      }
+      if (file.size > MAX_UPLOAD_BYTES) {
+        setError(
+          `Image is ${(file.size / (1024 * 1024)).toFixed(1)} MB; max ${
+            MAX_UPLOAD_BYTES / (1024 * 1024)
+          } MB.`,
+        );
+        return;
+      }
+      await analyzeBlob(file, "upload");
     },
     [analyzeBlob],
   );
+
+  const captureDisabled = loading || countdown !== null;
 
   return (
     <div className="mx-auto max-w-6xl px-5 py-8 sm:px-8">
@@ -162,14 +228,14 @@ export default function ExamPage() {
             <button
               type="button"
               onClick={startCapture}
-              disabled={loading}
+              disabled={captureDisabled}
               className="bg-[var(--brick)] px-5 py-2.5 text-sm text-[var(--surface)] disabled:opacity-50"
             >
               {loading ? "Reading chromophores…" : "Capture exam"}
             </button>
             <button
               type="button"
-              disabled={loading}
+              disabled={captureDisabled}
               onClick={() => fileInputRef.current?.click()}
               className="border border-[var(--line)] bg-[var(--surface)] px-4 py-2.5 text-sm disabled:opacity-50"
             >
